@@ -182,9 +182,8 @@ namespace NS_Communication
             timerTimeout = true;
         }
 
-        public void sendCmd(byte[] outBuffer, int outLength, out byte[] inBuffer, int inLength)
+        public byte[] buildPackage(byte[] outBuffer, int outLength)
         {
-            inBuffer = null;
             if (outLength > maxDataFrameLenth)
             {
                 throw (new SendCmdException(ErrorStatus.SendPackageLengthOverflow));
@@ -193,8 +192,13 @@ namespace NS_Communication
             byte[] head = packageHead(outLength);
             byte[] body = packageBody(outBuffer, 0, outLength);
             byte[] tail = packageTail(head, body);
-            byte[] outFrame = packageFrame(head, body, tail);
+            return packageFrame(head, body, tail);
+        }
 
+        public void sendCmd(byte[] outBuffer, int outLength, out byte[] inBuffer, int inLength)
+        {
+            inBuffer = null;
+            byte[] outFrame = buildPackage(outBuffer, outLength);
             if (slaveNeedReply() == false)
             {
                 if (send(outFrame) == false)

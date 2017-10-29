@@ -44,13 +44,13 @@ namespace DFU
             FirewallHelp.AuthorizeApplication(Text, Application.ExecutablePath, NET_FW_SCOPE_.NET_FW_SCOPE_ALL, NET_FW_IP_VERSION_.NET_FW_IP_VERSION_ANY);
 
             new ConsoleRemapTextBox(textBox_Log);
-            refreshIP();
+            refreshLocalIP();
             Console.WriteLine("请选择升级固件...");
             button_Upgrade.Enabled = false;
             udpCommu = new UdpCommu(0, Communication.IndexOutputType.UsualMasterSendSlaveReply); 
         }
 
-        private void refreshIP()
+        private void refreshLocalIP()
         {
             comboBox_LocalIP.Items.Clear();
 
@@ -69,7 +69,7 @@ namespace DFU
 
         private void button_Refresh_Click(object sender, EventArgs e)
         {
-            refreshIP();
+            refreshLocalIP();
         }
 
         private void button_File_Click(object sender, EventArgs e)
@@ -181,18 +181,38 @@ namespace DFU
                 button_Ping.Enabled = true;
                 button_File.Enabled = true;
                 button_Refresh.Enabled = true;
+                button_searchDevice.Enabled = true;
             }));
         }
 
-        private bool autoUpgrade()
+        enum UpgradeStatus
+        {
+            Auto = 0,
+            Manual,
+            giveup,
+        }
+
+        private UpgradeStatus autoUpgrade()
         {
             Console.WriteLine("Try auto upgrade...");
-            udpCommu.remoteEP = new IPEndPoint(IPAddress.Broadcast, prmPort);
-            Protocal.CmdTxUpgrade outPackage;
-            outPackage.cmd = Protocal.CMD_FIRMWARE_UPDATE;
-            outPackage.code = (byte)Protocal.UpgradeCode.AskAllowUpgrade;
-            outPackage.passwd = Protocal.UpgradePasswd;
-            byte[] outBytes = Struct.StructToBytes(outPackage);
+            if (comboBox_deviceIP.Items.Count == 0)
+            {
+                UpdateDeviceIP();
+                switch (comboBox_deviceIP.Items.Count)
+                {
+                    case 0:
+                        Console.WriteLine("Give up auto upgrade...");
+                        return UpgradeStatus.Manual;
+                    case 1:
+                        break;
+                    default:
+                        Console.WriteLine("请选择升级的设备：");
+                        return UpgradeStatus.giveup;
+                }
+            }
+           
+            udpCommu.remoteEP = udpCommu.remoteEPList.ElementAt(comboBox_deviceIP.SelectedIndex);
+            byte[] outBytes = buildUpgradeCmd((byte)Protocal.UpgradeCode.AskAllowUpgrade);
             byte[] inBytes;
             try
             {
@@ -202,32 +222,31 @@ namespace DFU
                 if (upgress.replyCode != (byte)Protocal.UpgradeStatus.Allow)
                 {
                     Console.WriteLine("Quit auto upgrade, because of " + (Protocal.UpgradeStatus)upgress.replyCode);
-                    return false;
+                    return UpgradeStatus.Manual;
                 }
                 Console.WriteLine("OK!");
 
                 Console.WriteLine("Start...");
-                outPackage.code = (byte)Protocal.UpgradeCode.StartUpgrade;
-                outBytes = Struct.StructToBytes(outPackage);
+                outBytes = buildUpgradeCmd((byte)Protocal.UpgradeCode.StartUpgrade);
                 udpCommu.sendCmd(outBytes, outBytes.Length, out inBytes, Marshal.SizeOf(typeof(Protocal.CmdRxUpgrade)));
                 upgress = (Protocal.CmdRxUpgrade)Struct.BytesToStuct(inBytes, typeof(Protocal.CmdRxUpgrade));
                 if (upgress.replyCode != (byte)Protocal.UpgradeStatus.Allow)
                 {
                     Console.WriteLine("Quit auto upgrade, because of " + (Protocal.UpgradeStatus)upgress.replyCode);
-                    return false;
+                    return UpgradeStatus.Manual;
                 }
                 Console.WriteLine("OK!");
             }
             catch (SendCmdException e)
             {
                 Console.WriteLine("Quit auto upgrade, because of " + e.errorStatus);
-                return false;
+                return UpgradeStatus.Manual;
             }
             remoteEP = udpCommu.remoteEP;
             remoteEP.Port = bootPort;
-            refreshIP();
+            refreshLocalIP();
 
-            return true;
+            return UpgradeStatus.Auto;
         }
 
         private void upgradeHandler()
@@ -263,18 +282,23 @@ namespace DFU
             button_Ping.Enabled = false;
             button_File.Enabled = false;
             button_Refresh.Enabled = false;
+            button_searchDevice.Enabled = false;
 
             remoteEP = new IPEndPoint(IPAddress.Parse(bootIP), bootPort);
-            if (autoUpgrade() == true)
+            UpgradeStatus status = autoUpgrade();
+            switch (status)
             {
-                Console.WriteLine("Wait for PRM jump to boot...");
-                const int waitPRMJumpTimeout = 1000;
-                timer = new System.Threading.Timer(TimerTimeoutCalBack, null, waitPRMJumpTimeout, 0);
-            }
-            else
-            {
-                Console.WriteLine("Try mamual upgrade...");
-                upgradeHandler();
+                case UpgradeStatus.Auto:
+                    Console.WriteLine("Wait for PRM jump to boot...");
+                    const int waitPRMJumpTimeout = 1000;
+                    timer = new System.Threading.Timer(TimerTimeoutCalBack, null, waitPRMJumpTimeout, 0);
+                    break;
+                case UpgradeStatus.Manual:
+                    Console.WriteLine("Try mamual upgrade...");
+                    upgradeHandler();
+                    break;
+                default:
+                    break;
             }
         }
 
@@ -283,6 +307,38 @@ namespace DFU
         private void textBox_Log_MouseDown(object sender, MouseEventArgs e)
         {            
             HideCaret((sender as TextBox).Handle);
+        }
+
+        private byte[] buildUpgradeCmd(byte code)
+        {
+            Protocal.CmdTxUpgrade outPackage;
+            outPackage.cmd = Protocal.CMD_FIRMWARE_UPDATE;
+            outPackage.code = (byte)Protocal.UpgradeCode.AskAllowUpgrade;
+            outPackage.passwd = Protocal.UpgradePasswd;
+            return Struct.StructToBytes(outPackage);
+        }
+        
+        private void UpdateDeviceIP()
+        {
+            byte[] sendPackage = buildUpgradeCmd((byte)Protocal.UpgradeCode.AskAllowUpgrade);
+            if (udpCommu.sendBroadcastCmd(prmPort, sendPackage, sendPackage.Length) == true)
+            {
+                if (udpCommu.remoteEPList.Count != 0)
+                {
+                    comboBox_deviceIP.Items.Clear();
+                    foreach (IPEndPoint ep in udpCommu.remoteEPList)
+                    {
+                        comboBox_deviceIP.Items.Add(ep.ToString());
+                    }
+                    comboBox_deviceIP.SelectedIndex = 0;
+                }
+                Console.WriteLine("Find online device .......... < " + udpCommu.remoteEPList.Count + " >");
+            }
+        }
+
+        private void button_searchDevice_Click(object sender, EventArgs e)
+        {
+            UpdateDeviceIP();
         }
     }
 }

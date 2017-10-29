@@ -38,13 +38,14 @@ namespace NS_Communication
     {
         private UdpClient client = null;
         public IPEndPoint remoteEP { get; set; }
+        public List<IPEndPoint> remoteEPList { get; set; }
 
         public UdpCommu(int localPort, IndexOutputType indexOutputType)
         {
             this.indexOutputType = indexOutputType;
             client = new UdpClient(localPort);           
-            
             UdpCommuReceive commuReceive = new UdpCommuReceive(indexOutputType, this, notifyReceiveDoneEventHandler);
+            remoteEPList = new List<IPEndPoint>();
         }
 
         public void close()
@@ -68,6 +69,21 @@ namespace NS_Communication
                 ret = false;
             }
             return ret;
+        }
+
+        public bool sendBroadcastCmd(int remotePort, byte[] package, int length)
+        {
+            remoteEP = new IPEndPoint(IPAddress.Broadcast, remotePort);
+            remoteEPList.Clear();
+            byte[] sendPackage = buildPackage(package, length);
+            if (send(sendPackage) == false)
+            {
+                return false;
+            }
+            /* Wait receive data */
+            Thread.Sleep(100);
+            remoteEP = new IPEndPoint(IPAddress.Any, remotePort);
+            return true;
         }
 
         protected override byte[] packageHead(int bodySize)
@@ -131,7 +147,7 @@ namespace NS_Communication
                 frame = client.Receive(ref ep);
                 if (remoteEP.Address == IPAddress.Broadcast)
                 {
-                    remoteEP = ep;
+                    remoteEPList.Add(ep);
                 }
             }
             catch
