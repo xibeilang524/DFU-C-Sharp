@@ -46,7 +46,7 @@ namespace DFU
             new ConsoleRemapTextBox(textBox_Log);
             refreshLocalIP();
             Console.WriteLine("请选择升级固件...");
-            button_Upgrade.Enabled = false;
+            SetUI2(false);
             udpCommu = new UdpCommu(0, Communication.IndexOutputType.UsualMasterSendSlaveReply); 
         }
 
@@ -79,15 +79,18 @@ namespace DFU
             fileDialog.Title = "Open Bin File";
             if (fileDialog.ShowDialog() == DialogResult.OK)
             {
-                Console.WriteLine("点击【升级】按钮，开始升级...");
-                button_Upgrade.Enabled = true;
+                Console.WriteLine("\r\n手动升级说明：\r\n" +
+                    "  1、将控制器关机。\r\n" +
+                    "  2、用尖锐物体按住控制器【复位】按钮，开机，等待3秒钟后，松开手。\r\n" +
+                    "  3、点击【手动升级】按钮。");
+                SetUI2(true);
                 openFilePath = fileDialog.FileName;
                 openFileName = Path.GetFileName(openFilePath);
                 textBox_File.Text = openFileName;
             }
             else
             {
-                button_Upgrade.Enabled = false;
+                SetUI2(false);
             }
         }
 
@@ -175,42 +178,16 @@ namespace DFU
                     MessageBoxButtons.OK, MessageBoxIcon.Information, MessageBoxDefaultButton.Button1);
             }
 
-            button_Upgrade.BeginInvoke(new ThreadStart(() =>
+            button_AutoUpgrade.BeginInvoke(new ThreadStart(() =>
             {
-                button_Upgrade.Enabled = true;
-                button_Ping.Enabled = true;
-                button_File.Enabled = true;
-                button_Refresh.Enabled = true;
-                button_searchDevice.Enabled = true;
+                SetUI1(true);
+                SetUI2(true);
             }));
         }
 
-        enum UpgradeStatus
+        private bool autoUpgrade()
         {
-            Auto = 0,
-            Manual,
-            giveup,
-        }
-
-        private UpgradeStatus autoUpgrade()
-        {
-            Console.WriteLine("Try auto upgrade...");
-            if (comboBox_deviceIP.Items.Count == 0)
-            {
-                UpdateDeviceIP();
-                switch (comboBox_deviceIP.Items.Count)
-                {
-                    case 0:
-                        Console.WriteLine("Give up auto upgrade...");
-                        return UpgradeStatus.Manual;
-                    case 1:
-                        break;
-                    default:
-                        Console.WriteLine("请选择升级的设备：");
-                        return UpgradeStatus.giveup;
-                }
-            }
-           
+            Console.WriteLine("Try auto upgrade...");     
             udpCommu.remoteEP = udpCommu.remoteEPList.ElementAt(comboBox_deviceIP.SelectedIndex);
             byte[] outBytes = buildUpgradeCmd((byte)Protocal.UpgradeCode.AskAllowUpgrade);
             byte[] inBytes;
@@ -222,7 +199,9 @@ namespace DFU
                 if (upgress.replyCode != (byte)Protocal.UpgradeStatus.Allow)
                 {
                     Console.WriteLine("Quit auto upgrade, because of " + (Protocal.UpgradeStatus)upgress.replyCode);
-                    return UpgradeStatus.Manual;
+                    MessageBox.Show("控制器正在忙，拒绝升级！", "提示信息",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information, MessageBoxDefaultButton.Button1);
+                    return false;
                 }
                 Console.WriteLine("OK!");
 
@@ -233,20 +212,19 @@ namespace DFU
                 if (upgress.replyCode != (byte)Protocal.UpgradeStatus.Allow)
                 {
                     Console.WriteLine("Quit auto upgrade, because of " + (Protocal.UpgradeStatus)upgress.replyCode);
-                    return UpgradeStatus.Manual;
+                    MessageBox.Show("控制器正在忙，拒绝升级！", "提示信息",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information, MessageBoxDefaultButton.Button1);
+                    return false;
                 }
                 Console.WriteLine("OK!");
             }
             catch (SendCmdException e)
             {
                 Console.WriteLine("Quit auto upgrade, because of " + e.errorStatus);
-                return UpgradeStatus.Manual;
-            }
-            remoteEP = udpCommu.remoteEP;
-            remoteEP.Port = bootPort;
-            refreshLocalIP();
+                return false;
+            }            
 
-            return UpgradeStatus.Auto;
+            return true;
         }
 
         private void upgradeHandler()
@@ -274,31 +252,54 @@ namespace DFU
             upgradeHandler();
         }
 
-        private void button_Upgrade_Click(object sender, EventArgs e)
+        private void SetUI1(bool status)
+        {
+            button_AutoUpgrade.Enabled = status;
+            button_manualUpgrade.Enabled = status;
+            button_Ping.Enabled = status;
+            button_File.Enabled = status;
+            button_Refresh.Enabled = status;
+            button_searchDevice.Enabled = status;
+        }
+
+        private void SetUI2(bool status)
+        {
+            if (status == false)
+            {
+                button_AutoUpgrade.Enabled = false;
+                button_manualUpgrade.Enabled = false;
+            }
+            else
+            {
+                if (comboBox_deviceIP.Items.Count == 0)
+                {
+                    button_AutoUpgrade.Enabled = false;
+                    button_manualUpgrade.Enabled = true;
+                }
+                else
+                {
+                    button_AutoUpgrade.Enabled = true;
+                    button_manualUpgrade.Enabled = false;
+                }
+            }          
+        }
+
+        private void button_AutoUpgrade_Click(object sender, EventArgs e)
         {
             stopWatch = new Stopwatch();
             stopWatch.Start();
-            button_Upgrade.Enabled = false;
-            button_Ping.Enabled = false;
-            button_File.Enabled = false;
-            button_Refresh.Enabled = false;
-            button_searchDevice.Enabled = false;
-
-            remoteEP = new IPEndPoint(IPAddress.Parse(bootIP), bootPort);
-            UpgradeStatus status = autoUpgrade();
-            switch (status)
+            SetUI1(false);
+ 
+            if (autoUpgrade() == true)
             {
-                case UpgradeStatus.Auto:
-                    Console.WriteLine("Wait for PRM jump to boot...");
-                    const int waitPRMJumpTimeout = 1000;
-                    timer = new System.Threading.Timer(TimerTimeoutCalBack, null, waitPRMJumpTimeout, 0);
-                    break;
-                case UpgradeStatus.Manual:
-                    Console.WriteLine("Try mamual upgrade...");
-                    upgradeHandler();
-                    break;
-                default:
-                    break;
+                Console.WriteLine("Wait for PRM jump to boot...");
+                const int waitPRMJumpTimeout = 1000;
+                timer = new System.Threading.Timer(TimerTimeoutCalBack, null, waitPRMJumpTimeout, 0);
+            }
+            else
+            {
+                SetUI1(true);
+                SetUI2(true);
             }
         }
 
@@ -320,25 +321,41 @@ namespace DFU
         
         private void UpdateDeviceIP()
         {
+            comboBox_deviceIP.Items.Clear();
             byte[] sendPackage = buildUpgradeCmd((byte)Protocal.UpgradeCode.AskAllowUpgrade);
             if (udpCommu.sendBroadcastCmd(prmPort, sendPackage, sendPackage.Length) == true)
             {
                 if (udpCommu.remoteEPList.Count != 0)
-                {
-                    comboBox_deviceIP.Items.Clear();
+                {                    
                     foreach (IPEndPoint ep in udpCommu.remoteEPList)
                     {
                         comboBox_deviceIP.Items.Add(ep.ToString());
                     }
                     comboBox_deviceIP.SelectedIndex = 0;
+                    SetUI2(true);                    
                 }
-                Console.WriteLine("Find online device .......... < " + udpCommu.remoteEPList.Count + " >");
+                Console.WriteLine("支持自动升级的控制器 .......... " + udpCommu.remoteEPList.Count + "个");
             }
         }
 
         private void button_searchDevice_Click(object sender, EventArgs e)
         {
             UpdateDeviceIP();
+        }
+
+        private void button_manualUpgrade_Click(object sender, EventArgs e)
+        {
+            stopWatch = new Stopwatch();
+            stopWatch.Start();
+            SetUI1(false);
+            upgradeHandler();
+        }
+
+        private void comboBox_deviceIP_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            remoteEP = udpCommu.remoteEPList.ElementAt(comboBox_deviceIP.SelectedIndex);
+            remoteEP.Port = bootPort;
+            refreshLocalIP();
         }
     }
 }
